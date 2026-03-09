@@ -1,0 +1,803 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>加盟保障區域系統</title>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.0/package/dist/xlsx.full.min.js"></script>
+    <!-- 引入 html2canvas 用於截圖匯出 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+
+    <style>
+        body { font-family: "Microsoft JhengHei", sans-serif; }
+        #map-container { height: 100%; width: 100%; min-height: 400px; z-index: 1; }
+        .bg-pattern { background-color: #f3f4f6; background-image: radial-gradient(#d1d5db 1px, transparent 1px); background-size: 20px 20px; }
+        
+        /* 一般店名標籤 */
+        .store-label { background: transparent !important; border: none !important; box-shadow: none !important; font-size: 11px; font-weight: 900; color: #000; text-shadow: -1.5px -1.5px 0 #fff, 1.5px -1.5px 0 #fff, -1.5px 1.5px 0 #fff, 1.5px 1.5px 0 #fff; white-space: nowrap; margin-top: -10px; }
+        
+        /* 匯入純店名標籤 (加大粗體) */
+        .store-label-large { background: transparent !important; border: none !important; box-shadow: none !important; font-size: 15px; font-weight: 900; color: #111827; text-shadow: -2px -2px 0 #fff, 2px -2px 0 #fff, -2px 2px 0 #fff, 2px 2px 0 #fff, 0px 4px 6px rgba(0,0,0,0.3); white-space: nowrap; margin-top: -12px; letter-spacing: 0.5px; }
+        
+        .leaflet-tooltip-bottom:before { display: none; }
+        .popup-btn { display: block; width: 100%; padding: 6px 12px; margin-bottom: 4px; border-radius: 4px; font-size: 12px; cursor: pointer; border: 1px solid #ccc; background: #fff; text-align: left; }
+        .popup-btn:hover { background: #f3f4f6; }
+        .popup-btn.primary { color: #2563eb; border-color: #bfdbfe; background: #eff6ff; }
+        .popup-btn.danger { color: #dc2626; border-color: #fecaca; background: #fef2f2; }
+        .leaflet-popup-content { margin: 8px; min-width: 160px; }
+        .leaflet-popup-content p { margin: 0 0 8px 0; font-weight: bold; font-size: 14px; border-bottom: 1px solid #eee; padding-bottom: 4px; }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: #f1f1f1; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+        .z-highest { z-index: 99999 !important; }
+        .drawing-controls { z-index: 9999 !important; pointer-events: auto; }
+    </style>
+</head>
+<body class="bg-gray-50 h-screen flex flex-col overflow-hidden">
+    <div id="root" class="h-full flex flex-col"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef, useMemo } = React;
+
+        // 16 種精選顏色
+        const POLYGON_COLORS = [
+            '#ef4444', '#f97316', '#f59e0b', '#eab308', 
+            '#84cc16', '#22c55e', '#10b981', '#06b6d4', 
+            '#0ea5e9', '#3b82f6', '#6366f1', '#8b5cf6', 
+            '#d946ef', '#ec4899', '#64748b', '#1f2937'
+        ];
+
+        // --- 完整 Icons 集合 (請勿刪除任何一個) ---
+        const Icons = {
+            Store: () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m2 7 4.41-4.41A2 2 0 0 1 7.83 2h8.34a2 2 0 0 1 1.42.59L22 7"/><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><path d="M15 22v-4a2 2 0 0 0-2-2h-2a2 2 0 0 0-2 2v4"/><path d="M2 7h20"/><path d="M22 7v3a2 2 0 0 1-2 2v0a2.7 2.7 0 0 1-1.59-.63.7.7 0 0 0-.82 0A2.7 2.7 0 0 1 16 12a2.7 2.7 0 0 1-1.59-.63.7.7 0 0 0-.82 0A2.7 2.7 0 0 1 12 12a2.7 2.7 0 0 1-1.59-.63.7.7 0 0 0-.82 0A2.7 2.7 0 0 1 8 12a2.7 2.7 0 0 1-1.59-.63.7.7 0 0 0-.82 0A2.7 2.7 0 0 1 4 12v0a2 2 0 0 1-2-2V7"/></svg>,
+            AlertTriangle: () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-red-600"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>,
+            CheckCircle: () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-green-600"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>,
+            Navigation: () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-blue-500"><polygon points="3 11 22 2 13 21 11 13 3 11"/></svg>,
+            MousePointer2: () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m4 4 7.07 17 2.51-7.39L21 11.07z"/></svg>,
+            Plus: () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>,
+            Layers: () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>,
+            Eraser: () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"/><path d="M22 21H7"/><path d="m5 11 9 9"/></svg>,
+            Undo2: () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5v0a5.5 5.5 0 0 1-5.5 5.5H11"/></svg>,
+            Upload: () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>,
+            FileSpreadsheet: () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 22h14a2 2 0 0 0 2-2V7.5L14.5 2H6a2 2 0 0 0-2 2v4"/><polyline points="14 2 14 8 20 8"/><path d="M8 13h2"/><path d="M8 17h2"/><path d="M14 13h2"/><path d="M14 17h2"/></svg>,
+            Loader: () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="animate-spin"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>,
+            Save: () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>,
+            Download: () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>,
+            FileJson: () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><path d="M10 12a1 1 0 0 0-1 1v1a1 1 0 0 1-1 1 1 1 0 0 1 1 1v1a1 1 0 0 0 1 1"/><path d="M14 18a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1 1 1 0 0 1-1-1v-1a1 1 0 0 0-1-1"/></svg>,
+            Lock: () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>,
+            FileText: () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><line x1="10" y1="9" x2="8" y2="9"/></svg>,
+            Clipboard: () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M12 11h4"/><path d="M12 16h4"/><path d="M8 11h.01"/><path d="M8 16h.01"/></svg>,
+            Eye: () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>,
+            Edit: () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>,
+            Search: () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>,
+            ChevronDown: () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6"/></svg>,
+            ChevronRight: () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m9 18 6-6-6-6"/></svg>,
+            Trash: () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>,
+            Check: () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>,
+            AlertOctagon: () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="7.86 2 16.14 2 22 7.86 22 16.14 16.14 22 7.86 22 2 16.14 2 7.86 7.86 2"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>,
+            LockOpen: () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg>,
+            PenTool: () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 19 7-7 3 3-7 7-3-3z"/><path d="m18 13-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/><path d="m2 2 7.586 7.586"/><circle cx="11" cy="11" r="2"/></svg>,
+            ImageIcon: () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>
+        };
+
+        // --- Distance & Geometery Utils ---
+        const simpleDistance = (lat1, lon1, lat2, lon2) => {
+            const R = 6371e3; 
+            const φ1 = lat1 * Math.PI/180;
+            const φ2 = lat2 * Math.PI/180;
+            const Δφ = (lat2-lat1) * Math.PI/180;
+            const Δλ = (lon2-lon1) * Math.PI/180;
+            const a = Math.sin(Δφ/2) * Math.sin(Δφ/2) + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ/2) * Math.sin(Δλ/2);
+            return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+        };
+
+        const isPointInPolygon = (point, vs) => {
+            const x = point[0], y = point[1];
+            let inside = false;
+            for (let i = 0, j = vs.length - 1; i < vs.length; j = i++) {
+                const xi = vs[i][0], yi = vs[i][1];
+                const xj = vs[j][0], yj = vs[j][1];
+                const intersect = ((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
+                if (intersect) inside = !inside;
+            }
+            return inside;
+        };
+
+        const DEFAULT_CENTER = [25.0422, 121.5060];
+
+        // --- Modals ---
+        const LoginScreen = ({ onLogin }) => {
+            const [pass, setPass] = useState(''); const [error, setError] = useState(false);
+            const handleSubmit = (e) => { e.preventDefault(); if (pass === '8888') onLogin(); else setError(true); };
+            return (
+                <div className="h-screen w-full flex items-center justify-center bg-pattern z-highest relative">
+                    <div className="bg-white p-8 rounded-lg shadow-xl w-full max-w-sm border border-gray-100">
+                        <div className="flex justify-center mb-4 text-blue-600"><div className="bg-blue-100 p-3 rounded-full"><Icons.Lock /></div></div>
+                        <h2 className="text-xl font-bold text-center text-gray-800 mb-6">加盟保障區域系統</h2>
+                        <form onSubmit={handleSubmit}>
+                            <div className="mb-4"><label className="block text-gray-700 text-sm font-bold mb-2">通行密碼</label><input type="password" value={pass} onChange={(e) => {setPass(e.target.value); setError(false);}} className="shadow appearance-none border rounded w-full py-3 px-3 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="請輸入密碼" autoFocus />{error && <p className="text-red-500 text-xs italic mt-2">密碼錯誤，請重新輸入。</p>}</div>
+                            <button className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded focus:outline-none focus:shadow-outline transition-colors" type="submit">進入系統</button>
+                        </form>
+                    </div>
+                </div>
+            );
+        };
+
+        const ConfirmModal = ({ title, message, onConfirm, onCancel, confirmText = "確定", cancelText = "取消", isDangerous = false }) => (
+            <div className="fixed inset-0 bg-gray-900/50 z-highest flex items-center justify-center p-4 backdrop-blur-sm">
+                <div className="bg-white rounded-lg shadow-2xl w-full max-w-sm animate-[scale-in_0.2s_ease-out] border border-gray-200">
+                    <div className={`p-4 border-b flex items-center gap-2 ${isDangerous ? 'bg-red-50 text-red-800' : 'bg-gray-50 text-gray-800'} rounded-t-lg`}>
+                        {isDangerous && <Icons.AlertTriangle />}
+                        <h3 className="font-bold text-lg">{title}</h3>
+                    </div>
+                    <div className="p-6 text-gray-700 whitespace-pre-wrap">{message}</div>
+                    <div className="p-4 border-t bg-gray-50 flex justify-end gap-2 rounded-b-lg">
+                        <button onClick={(e) => { e.stopPropagation(); onCancel(); }} className="px-4 py-2 text-gray-600 hover:bg-gray-200 rounded text-sm font-medium">{cancelText}</button>
+                        <button onClick={(e) => { e.stopPropagation(); onConfirm(); }} className={`px-4 py-2 text-white rounded text-sm font-medium shadow-sm ${isDangerous ? 'bg-red-600 hover:bg-red-700' : 'bg-blue-600 hover:bg-blue-700'}`}>{confirmText}</button>
+                    </div>
+                </div>
+            </div>
+        );
+        
+        const AlertModal = ({ message, onClose }) => (
+             <div className="fixed inset-0 bg-gray-900/50 z-highest flex items-center justify-center p-4 backdrop-blur-sm">
+                <div className="bg-white rounded-lg shadow-2xl w-full max-w-sm animate-[scale-in_0.2s_ease-out] border border-gray-200">
+                    <div className="p-4 border-b flex items-center gap-2 bg-blue-50 text-blue-800 rounded-t-lg">
+                        <Icons.CheckCircle />
+                        <h3 className="font-bold text-lg">系統訊息</h3>
+                    </div>
+                    <div className="p-6 text-gray-700 whitespace-pre-wrap">{message}</div>
+                    <div className="p-4 border-t bg-gray-50 flex justify-end rounded-b-lg">
+                        <button onClick={(e) => { e.stopPropagation(); onClose(); }} className="px-6 py-2 bg-blue-600 text-white rounded text-sm font-medium hover:bg-blue-700">確定</button>
+                    </div>
+                </div>
+            </div>
+        );
+
+        const PasteModal = ({ isOpen, onClose, onProcess }) => {
+            const [text, setText] = useState('');
+            if (!isOpen) return null;
+            return (
+                <div className="fixed inset-0 bg-gray-900/50 z-highest flex items-center justify-center p-4 backdrop-blur-sm">
+                    <div className="bg-white rounded-lg shadow-xl w-full max-w-lg flex flex-col max-h-[90vh]">
+                        <div className="p-4 border-b flex justify-between items-center"><h3 className="font-bold text-lg text-gray-800 flex items-center gap-2"><Icons.Clipboard /> 貼上文字匯入</h3><button onClick={onClose} className="text-gray-500 hover:text-gray-700">✕</button></div>
+                        <div className="p-4 flex-1 overflow-hidden flex flex-col"><p className="text-sm text-gray-600 mb-2">請直接貼上店名與地址，一行一筆資料。</p><textarea className="flex-1 w-full border rounded p-3 text-sm font-mono focus:ring-2 focus:ring-blue-500 focus:outline-none resize-none" placeholder="西門店, 台北市成都路10號" value={text} onChange={(e) => setText(e.target.value)} /></div>
+                        <div className="p-4 border-t bg-gray-50 flex justify-end gap-2 rounded-b-lg"><button onClick={onClose} className="px-4 py-2 text-gray-600 hover:bg-gray-200 rounded text-sm">取消</button><button onClick={() => onProcess(text)} disabled={!text.trim()} className="px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:opacity-50">開始分析</button></div>
+                    </div>
+                </div>
+            );
+        };
+
+        const EditStoreModal = ({ store, onClose, onSave }) => {
+            const [name, setName] = useState(store?.name || '');
+            const [radius, setRadius] = useState(store?.radius || 0);
+            useEffect(() => { if(store) { setName(store.name); setRadius(store.radius); } }, [store]);
+            if (!store) return null;
+            return (
+                <div className="fixed inset-0 bg-gray-900/50 z-highest flex items-center justify-center p-4 backdrop-blur-sm">
+                    <div className="bg-white rounded-lg shadow-xl w-full max-w-sm">
+                        <div className="p-4 border-b flex justify-between items-center"><h3 className="font-bold text-lg text-gray-800">編輯店家資訊</h3><button onClick={onClose} className="text-gray-500 hover:text-gray-700">✕</button></div>
+                        <div className="p-4 flex flex-col gap-4">
+                            <div><label className="block text-xs font-bold text-gray-600 mb-1">店名</label><input className="w-full border rounded p-2 text-sm" value={name} onChange={e => setName(e.target.value)} /></div>
+                            {store.type === 'radius' && (<div><label className="block text-xs font-bold text-gray-600 mb-1">保障半徑 (公尺)</label><input type="number" className="w-full border rounded p-2 text-sm" value={radius} onChange={e => setRadius(Number(e.target.value))} /></div>)}
+                            {store.type === 'polygon' && <p className="text-xs text-gray-500 bg-gray-100 p-2 rounded">此為多邊形區域，無法修改半徑，請使用重繪功能修改範圍。</p>}
+                            {store.type === 'point' && <p className="text-xs text-gray-500 bg-gray-100 p-2 rounded">此為純地標店名，無保障半徑範圍。</p>}
+                        </div>
+                        <div className="p-4 border-t bg-gray-50 flex justify-end gap-2 rounded-b-lg"><button onClick={onClose} className="px-3 py-2 text-gray-600 hover:bg-gray-200 rounded text-sm">取消</button><button onClick={() => onSave(store.id, name, radius)} className="px-3 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700">儲存變更</button></div>
+                    </div>
+                </div>
+            );
+        };
+
+        const App = () => {
+            const [isAuthenticated, setIsAuthenticated] = useState(false); 
+            const [defaultRadius, setDefaultRadius] = useState(1500);
+            const [stores, setStores] = useState(() => {
+                try { return JSON.parse(localStorage.getItem('franchiseMapData')) || [{ id: 1, name: "西門捷運旗艦店", type: "radius", center: [25.0422, 121.5083], radius: 1500, points: [] }]; } catch (e) { return []; }
+            });
+            const [candidate, setCandidate] = useState(null);
+            const [checkResult, setCheckResult] = useState({ status: 'idle', message: '' });
+            const [mode, setMode] = useState('check');
+            const [editingStoreId, setEditingStoreId] = useState(null); 
+            const [editingProps, setEditingProps] = useState(null); 
+            const [confirmAction, setConfirmAction] = useState(null); 
+            const [alertMessage, setAlertMessage] = useState(null);
+
+            const [tempPolygon, setTempPolygon] = useState([]);
+            const [polygonColor, setPolygonColor] = useState('#3b82f6'); 
+            const [mousePos, setMousePos] = useState(null);
+            const [newStoreName, setNewStoreName] = useState('');
+            const [isImporting, setIsImporting] = useState(false);
+            const [geocodeProgress, setGeocodeProgress] = useState({ current: 0, total: 0, active: false });
+            const [mapReady, setMapReady] = useState(false);
+            const [showPasteModal, setShowPasteModal] = useState(false);
+            const [searchTerm, setSearchTerm] = useState('');
+            const [showTools, setShowTools] = useState(false); 
+            const [isPolygonClosed, setIsPolygonClosed] = useState(false); 
+            const [isExportingImage, setIsExportingImage] = useState(false);
+
+            const mapRef = useRef(null);
+            const mapInstanceRef = useRef(null);
+            const layersRef = useRef([]);
+            const fileInputRef = useRef(null);
+            const jsonInputRef = useRef(null);
+            const actionRef = useRef(null);
+            const sidebarRef = useRef(null);
+
+            // ID 重複修復
+            useEffect(() => {
+                setStores(prevStores => {
+                    const ids = new Set(); const cleanStores = []; let hasDuplicates = false;
+                    prevStores.forEach(s => { if (ids.has(s.id)) { cleanStores.push({ ...s, id: Date.now() + Math.random() }); hasDuplicates = true; } else { ids.add(s.id); cleanStores.push(s); } });
+                    return hasDuplicates ? cleanStores : prevStores;
+                });
+            }, []);
+
+            useEffect(() => { localStorage.setItem('franchiseMapData', JSON.stringify(stores)); }, [stores]);
+
+            useEffect(() => {
+                if (!isAuthenticated) return;
+                if (!mapRef.current || mapInstanceRef.current) return;
+                setTimeout(() => {
+                    if (!mapRef.current) return;
+                    // 加入 preferCanvas: true，讓地圖採用 Canvas 渲染模式，讓 html2canvas 能夠順利擷取多邊形與圓形
+                    const map = L.map(mapRef.current, { preferCanvas: true }).setView(DEFAULT_CENTER, 14);
+                    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap contributors' }).addTo(map);
+                    mapInstanceRef.current = map;
+                    setMapReady(true);
+                    setTimeout(() => { map.invalidateSize(); }, 100);
+                }, 100);
+            }, [isAuthenticated]);
+
+            useEffect(() => { window.handleStoreAction = (id, action) => { if (actionRef.current) actionRef.current(id, action); }; }, []);
+
+            const stateRef = useRef({ mode, newStoreName, stores, tempPolygon, candidate, defaultRadius, editingStoreId, isPolygonClosed, polygonColor });
+            useEffect(() => {
+                stateRef.current = { mode, newStoreName, stores, tempPolygon, candidate, defaultRadius, editingStoreId, isPolygonClosed, polygonColor };
+                actionRef.current = (id, action) => {
+                    const store = stateRef.current.stores.find(s => String(s.id) === String(id));
+                    if (!store) return;
+                    if (action === 'check') checkExistingStoreRef(store, stateRef.current.stores);
+                    else if (action === 'redraw') {
+                         setConfirmAction({ type: 'redraw', data: store, title: '重繪區域', message: `確定要為「${store.name}」重新繪製範圍嗎？\n(原本的標記或半徑將會在繪製完成後被取代)` });
+                    } else if (action === 'delete') {
+                        setConfirmAction({ type: 'delete', data: store, title: '確認刪除', message: `確定要刪除「${store.name}」嗎？\n(此動作無法復原)`, isDangerous: true });
+                    } else if (action === 'edit') {
+                        setEditingProps(store); mapInstanceRef.current.closePopup();
+                    }
+                };
+            }, [mode, newStoreName, stores, tempPolygon, candidate, defaultRadius, editingStoreId, isPolygonClosed, polygonColor]);
+
+            const executeConfirmAction = () => {
+                if (!confirmAction) return;
+                const { type, data } = confirmAction;
+
+                if (type === 'delete') {
+                    setStores(prev => prev.filter(s => String(s.id) !== String(data.id)));
+                    if(mapInstanceRef.current) mapInstanceRef.current.closePopup();
+                    setAlertMessage("已成功刪除店家！");
+                } else if (type === 'redraw') {
+                    setEditingStoreId(data.id); 
+                    setNewStoreName(data.name); 
+                    setTempPolygon([]); 
+                    setIsPolygonClosed(false); 
+                    setMode('add-polygon');
+                    if (data.type === 'polygon' && data.color) {
+                        setPolygonColor(data.color);
+                    } else {
+                        setPolygonColor('#3b82f6'); 
+                    }
+                    mapInstanceRef.current.closePopup();
+                    setShowTools(false); 
+                    if(sidebarRef.current) sidebarRef.current.scrollTop = 0;
+                    
+                } else if (type === 'clear') {
+                    setStores([]); 
+                    setCandidate(null); 
+                    setCheckResult({status:'idle', message:''}); 
+                    localStorage.removeItem('franchiseMapData');
+                    setAlertMessage("資料已全部清空！");
+                } else if (type === 'reset') {
+                    localStorage.removeItem('franchiseMapData');
+                    window.location.reload();
+                }
+
+                setConfirmAction(null);
+            };
+
+            const filteredStores = useMemo(() => {
+                if (!searchTerm) return stores;
+                return stores.filter(s => s.name.toLowerCase().includes(searchTerm.toLowerCase()));
+            }, [stores, searchTerm]);
+
+            useEffect(() => {
+                if (!mapInstanceRef.current) return;
+                const map = mapInstanceRef.current;
+                map.off('click mousemove dblclick');
+                map.on('click', (e) => {
+                    const current = stateRef.current;
+                    if (current.mode === 'check') { const point = [e.latlng.lat, e.latlng.lng]; setCandidate(point); checkPointAgainstStores(point, current.stores, "新選地點"); } 
+                    else if (current.mode === 'add-radius') { 
+                        const finalName = current.newStoreName.trim() || `自訂標記-${Math.floor(Math.random() * 1000)}`;
+                        const newStore = { id: Date.now(), name: finalName, type: 'radius', center: [e.latlng.lat, e.latlng.lng], radius: current.defaultRadius, points: [] }; 
+                        setStores([...current.stores, newStore]); 
+                        setNewStoreName(''); 
+                        setMode('check'); 
+                    } 
+                    else if (current.mode === 'add-polygon') {
+                        if (!current.isPolygonClosed) { 
+                            setTempPolygon([...current.tempPolygon, [e.latlng.lat, e.latlng.lng]]); 
+                        }
+                    }
+                });
+                map.on('mousemove', (e) => { 
+                    if (stateRef.current.mode === 'add-polygon' && !stateRef.current.isPolygonClosed) {
+                        setMousePos([e.latlng.lat, e.latlng.lng]); 
+                    } else {
+                        setMousePos(null); 
+                    }
+                });
+                map.on('dblclick', (e) => { 
+                    if (stateRef.current.mode === 'add-polygon' && !stateRef.current.isPolygonClosed) { 
+                        L.DomEvent.stopPropagation(e); 
+                        setIsPolygonClosed(true); 
+                        setMousePos(null); 
+                    } 
+                });
+                if (mode === 'add-polygon') { 
+                    map.doubleClickZoom.disable(); 
+                    map.getContainer().style.cursor = 'crosshair'; 
+                } else { 
+                    map.doubleClickZoom.enable(); 
+                    map.getContainer().style.cursor = ''; 
+                }
+            }, [mapReady, mode]);
+
+            useEffect(() => { if (mapInstanceRef.current && window.L) renderLayers(); }, [stores, candidate, tempPolygon, mousePos, editingStoreId, isPolygonClosed, polygonColor]);
+
+            const savePolygonStore = () => {
+                const current = stateRef.current;
+                if (!current.isPolygonClosed) { setAlertMessage("請先在地圖上「雙擊」或點擊「鎖定形狀」來封閉區域，才能儲存。"); return; }
+                if (current.tempPolygon.length < 3) { setAlertMessage("多邊形至少需要3個點"); return; }
+                
+                if (current.editingStoreId) {
+                    setStores(prev => prev.map(s => String(s.id) === String(current.editingStoreId) ? { ...s, type: 'polygon', points: current.tempPolygon, radius: 0, color: current.polygonColor } : s));
+                    setEditingStoreId(null); setTempPolygon([]); setNewStoreName(''); setMode('check'); setMousePos(null); setIsPolygonClosed(false);
+                    setAlertMessage("區域更新成功！");
+                } else {
+                    const finalName = current.newStoreName.trim() || `自訂區域-${Math.floor(Math.random() * 1000)}`;
+                    const newStore = { id: Date.now(), name: finalName, type: 'polygon', center: null, radius: 0, points: current.tempPolygon, color: current.polygonColor };
+                    setStores([...current.stores, newStore]); setTempPolygon([]); setNewStoreName(''); setMode('check'); setMousePos(null); setIsPolygonClosed(false);
+                    setAlertMessage("新區域已儲存成功！");
+                }
+            };
+            
+            const undoLastPoint = () => { 
+                if (isPolygonClosed) {
+                    setIsPolygonClosed(false); 
+                } else {
+                    setTempPolygon(prev => prev.slice(0, -1)); 
+                }
+            };
+
+            const flyToStore = (store) => { 
+                const map = mapInstanceRef.current; if (!map) return; 
+                let center;
+                if (store.type === 'radius' || store.type === 'point') {
+                    center = store.center;
+                } else if (store.type === 'polygon' && store.points && store.points.length > 0) {
+                    center = store.points[0];
+                } else {
+                    return;
+                }
+                map.flyTo(center, 15); 
+                checkExistingStoreRef(store, stores); 
+            };
+            const handleSaveProps = (id, newName, newRadius) => { setStores(prev => prev.map(s => String(s.id) === String(id) ? { ...s, name: newName, radius: newRadius } : s)); setEditingProps(null); };
+            const handleDeleteRequest = (e, store) => { e.preventDefault(); e.stopPropagation(); setConfirmAction({ type: 'delete', data: store, title: '確認刪除', message: `確定要刪除「${store.name}」嗎？\n(此動作無法復原)`, isDangerous: true }); };
+            
+            const handleRedrawRequest = (e, store) => {
+                e.preventDefault(); e.stopPropagation();
+                 setConfirmAction({
+                    type: 'redraw',
+                    data: store,
+                    title: '重繪區域',
+                    message: `確定要為「${store.name}」重新繪製範圍嗎？\n(原本的標記或半徑圓將會在繪製完成後被取代)`
+                });
+            };
+
+            const lockPolygon = (e) => { 
+                if(e) { e.stopPropagation(); e.preventDefault(); }
+                if (tempPolygon.length >= 3) {
+                    setIsPolygonClosed(true); setMousePos(null); 
+                }
+            };
+
+            // --- 圖片匯出處理 ---
+            const handleExportImage = async () => {
+                setIsExportingImage(true);
+                try {
+                    const mapElement = document.getElementById('map-container');
+                    if (!mapElement) throw new Error("找不到地圖元件");
+
+                    const canvas = await window.html2canvas(mapElement, {
+                        useCORS: true,
+                        allowTaint: false,
+                        backgroundColor: '#f3f4f6'
+                    });
+                    
+                    const imgData = canvas.toDataURL('image/jpeg', 0.9);
+                    const link = document.createElement('a');
+                    link.download = `加盟保障地圖_${new Date().toISOString().split('T')[0]}.jpg`;
+                    link.href = imgData;
+                    link.click();
+                } catch (error) {
+                    console.error("截圖失敗:", error);
+                    setAlertMessage("圖片匯出失敗，可能是因為地圖圖資的跨網域限制。");
+                } finally {
+                    setIsExportingImage(false);
+                }
+            };
+
+            const handlePasteImport = (text) => {
+                setShowPasteModal(false); const lines = text.split('\n').filter(line => line.trim() !== ''); if (lines.length === 0) return;
+                const addressQueue = []; const currentDefaultRadius = stateRef.current.defaultRadius;
+                lines.forEach((line, idx) => {
+                    let parts = line.split(/[,，\t]+/).map(p => p.trim()).filter(p => p);
+                    if (parts.length >= 2) { let name = parts[0]; let addr = parts[1]; if (name.length > addr.length && (name.includes('號') || name.includes('路') || name.includes('街'))) { [name, addr] = [addr, name]; } addressQueue.push({ id: Date.now() + idx, name, addr: cleanAddress(addr), radius: currentDefaultRadius }); }
+                    else if (parts.length === 1) addressQueue.push({ id: Date.now() + idx, name: `匯入店鋪-${idx+1}`, addr: cleanAddress(parts[0]), radius: currentDefaultRadius });
+                });
+                if (addressQueue.length > 0) processBatchGeocoding(addressQueue); else setAlertMessage("無法識別資料。");
+            };
+            const downloadTemplate = () => { const csvContent = "\uFEFF店名,地址,半徑,緯度,經度\n台北示範店,台北市萬華區成都路10號,1500,,\n高雄示範店,高雄市前金區中正四路211號,1500,,"; const link = document.createElement("a"); link.href = URL.createObjectURL(new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })); link.download = "店家匯入範例.csv"; document.body.appendChild(link); link.click(); document.body.removeChild(link); };
+            const handleExportJSON = () => { const link = document.createElement('a'); link.href = URL.createObjectURL(new Blob([JSON.stringify(stores, null, 2)], { type: 'application/json' })); link.download = `加盟地圖備份_${new Date().toISOString().split('T')[0]}.json`; document.body.appendChild(link); link.click(); document.body.removeChild(link); };
+            const handleImportJSON = (e) => { const file = e.target.files[0]; if (!file) return; const reader = new FileReader(); reader.onload = (evt) => { try { const json = JSON.parse(evt.target.result); if (Array.isArray(json) && confirm(`即將匯入 ${json.length} 筆資料？`)) setStores(json); } catch(err) { setAlertMessage("JSON 錯誤"); } }; reader.readAsText(file); e.target.value = null; };
+            const handleFileUpload = (e) => { const file = e.target.files[0]; if (!file) return; setIsImporting(true); const reader = new FileReader(); reader.onload = (evt) => { const wb = XLSX.read(evt.target.result, { type: 'binary' }); processImportedData(XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]])); }; reader.readAsBinaryString(file); e.target.value = null; };
+            const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+            const cleanAddress = (addr) => addr ? addr.toString().replace(/\(.*?\)/g, "").replace(/（.*?）/g, "").replace(/(\d+)([-~之]\d+)?(樓|F|f|B\d+).*/g, "").replace(/\d+室$/g, "").trim() : "";
+            
+            const processImportedData = async (data) => {
+                let success = 0, fail = 0; let addressQueue = []; const newStores = [];
+                data.forEach((row, idx) => { 
+                    const name = row['店名'] || row['名稱'] || `匯入-${idx+1}`; 
+                    const radius = parseFloat(row['半徑'] || row['radius']) || 0; 
+                    const type = radius > 0 ? 'radius' : 'point';
+                    const lat = parseFloat(row['緯度'] || row['lat']); 
+                    const lng = parseFloat(row['經度'] || row['lng']); 
+                    const rawAddr = row['地址'] || row['Address'] || row['addr']; 
+                    
+                    if (!isNaN(lat) && !isNaN(lng)) { 
+                        newStores.push({ id: Date.now()+idx, name, type, center: [lat, lng], radius, points: [] }); success++; 
+                    } else if (rawAddr) {
+                        addressQueue.push({ id: Date.now()+idx, name, addr: cleanAddress(rawAddr), radius, type }); 
+                    } else fail++; 
+                });
+                if (success > 0) { setStores(prev => [...prev, ...newStores]); if(mapInstanceRef.current && newStores[0]) mapInstanceRef.current.setView(newStores[0].center, 13); }
+                if (addressQueue.length > 0) { if (confirm(`發現 ${addressQueue.length} 筆資料只有地址，開始轉換？`)) processBatchGeocoding(addressQueue); } else if (success > 0) setAlertMessage(`成功匯入 ${success} 筆！`); setIsImporting(false);
+            };
+            
+            const processBatchGeocoding = async (queue) => {
+                setGeocodeProgress({ current: 0, total: queue.length, active: true }); let converted = 0, failed = 0;
+                for (let i = 0; i < queue.length; i++) { const item = queue[i]; setGeocodeProgress({ current: i + 1, total: queue.length, active: true }); try { let response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(item.addr)}&limit=1&accept-language=zh-TW&email=demo@example.com`); let results = await response.json(); if (!results || results.length === 0) { response = await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(item.addr)}&limit=1`); const photonRes = await response.json(); if (photonRes.features && photonRes.features.length > 0) { const [lon, lat] = photonRes.features[0].geometry.coordinates; results = [{ lat, lon }]; } } if (results && results.length > 0) { const lat = parseFloat(results[0].lat); const lon = parseFloat(results[0].lon); setStores(prev => [...prev, { id: item.id, name: item.name, type: item.type, center: [lat, lon], radius: item.radius, points: [] }]); converted++; } else failed++; } catch (e) { failed++; } await sleep(1500); }
+                setGeocodeProgress({ current: 0, total: 0, active: false }); setIsImporting(false); setAlertMessage(`處理完成！成功: ${converted} 筆, 失敗: ${failed} 筆`);
+            };
+
+            const checkPointAgainstStores = (point, allStores, targetName, excludeId = null) => {
+                let conflicts = []; allStores.forEach(store => { 
+                    if (store.id === excludeId) return; 
+                    let isConflict = false; 
+                    if (store.type === 'radius' && store.radius > 0) { 
+                        if (simpleDistance(point[0], point[1], store.center[0], store.center[1]) <= store.radius) isConflict = true; 
+                    } else if (store.type === 'polygon') { 
+                        if (isPointInPolygon(point, store.points)) isConflict = true; 
+                    } 
+                    if (isConflict) conflicts.push(store.name); 
+                });
+                if (conflicts.length > 0) setCheckResult({ status: 'blocked', message: `警報！與以下區域衝突：${conflicts.join('、 ')}` }); else setCheckResult({ status: 'allowed', message: '檢測通過：此地點不在任何保障區域內。' });
+            };
+            const checkExistingStoreRef = (store, allStores) => { 
+                let pt = null;
+                if (store.type === 'radius' || store.type === 'point') pt = store.center;
+                else if (store.type === 'polygon' && store.points && store.points.length > 0) pt = store.points[0];
+                if (pt) {
+                    setCandidate(pt); 
+                    checkPointAgainstStores(pt, allStores, store.name, store.id); 
+                }
+            };
+
+            const renderLayers = () => {
+                const map = mapInstanceRef.current; layersRef.current.forEach(l => map.removeLayer(l)); layersRef.current = [];
+                stores.forEach(store => {
+                    const isEditing = store.id === editingStoreId; const dashArray = isEditing ? '5, 10' : null; 
+                    let layer = []; const interactiveOptions = { interactive: true };
+                    
+                    const popupContent = `<p>${store.name}</p><button class="popup-btn primary" onclick="window.handleStoreAction('${store.id}', 'check')">🔍 檢測</button><button class="popup-btn" onclick="window.handleStoreAction('${store.id}', 'edit')">✏️ 編輯屬性</button><button class="popup-btn" onclick="window.handleStoreAction('${store.id}', 'redraw')">🖍️ 轉多邊形/重繪</button><button class="popup-btn danger" onclick="window.handleStoreAction('${store.id}', 'delete')">🗑️ 刪除</button>`;
+
+                    if (store.type === 'radius' || store.type === 'point') {
+                        if (store.type === 'radius' && store.radius > 0) {
+                            const circleColor = isEditing ? '#9ca3af' : '#3b82f6';
+                            const circle = L.circle(store.center, { color: circleColor, fillColor: circleColor, fillOpacity: 0.15, weight: 1, radius: store.radius, dashArray, ...interactiveOptions }).addTo(map);
+                            layer.push(circle);
+                        }
+                        const dotColor = isEditing ? '#9ca3af' : (store.type === 'radius' ? '#1e40af' : '#6b7280');
+                        const marker = L.marker(store.center, { icon: L.divIcon({ className: 'custom-dot-icon', html: `<div style="background-color: ${dotColor}; width: 8px; height: 8px; border-radius: 50%; border: 1px solid white; box-shadow: 0px 0px 3px rgba(0,0,0,0.3);"></div>`, iconSize: [8, 8], iconAnchor: [4, 4] }) }).addTo(map);
+                        const labelClass = store.type === 'point' ? 'store-label-large' : 'store-label';
+                        marker.bindTooltip(store.name, { permanent: true, direction: 'top', className: labelClass, offset: [0, -6] });
+                        marker.bindPopup(popupContent);
+                        layer.push(marker);
+                    } else if (store.type === 'polygon') {
+                        const polyColor = isEditing ? '#9ca3af' : (store.color || '#8b5cf6');
+                        const poly = L.polygon(store.points, { color: polyColor, fillColor: polyColor, fillOpacity: 0.15, weight: 2, dashArray, ...interactiveOptions }).addTo(map);
+                        const center = L.polygon(store.points).getBounds().getCenter();
+                        const marker = L.marker(center, { icon: L.divIcon({ className: 'custom-dot-icon', html: `<div style="background-color: ${polyColor}; width: 8px; height: 8px; border-radius: 50%; border: 1px solid white;"></div>`, iconSize: [8, 8], iconAnchor: [4, 4] }) }).addTo(map);
+                        marker.bindTooltip(store.name, { permanent: true, direction: 'top', className: 'store-label', offset: [0, -6] });
+                        marker.bindPopup(popupContent);
+                        layer.push(poly, marker);
+                    }
+                    layersRef.current.push(...layer);
+                });
+                
+                const drawingOptions = { interactive: false }; 
+                if (tempPolygon.length > 0) { 
+                    const drawColor = polygonColor; 
+                    const dashArray = isPolygonClosed ? null : '5,5';
+                    if (isPolygonClosed) layersRef.current.push(L.polygon(tempPolygon, { color: drawColor, weight: 3, dashArray: null, fillOpacity: 0.2, ...drawingOptions }).addTo(map));
+                    else layersRef.current.push(L.polyline(tempPolygon, { color: drawColor, weight: 3, dashArray: '5,5', ...drawingOptions }).addTo(map)); 
+                    
+                    tempPolygon.forEach(pt => layersRef.current.push(L.circleMarker(pt, { radius: 4, color: drawColor, fillColor: '#fff', fillOpacity: 1, ...drawingOptions }).addTo(map))); 
+                    if (mousePos && !isPolygonClosed) layersRef.current.push(L.polyline([tempPolygon[tempPolygon.length-1], mousePos], { color: drawColor, weight: 2, dashArray: '2,6', opacity: 0.7, ...drawingOptions }).addTo(map)); 
+                }
+                
+                if (candidate) { 
+                    const icon = L.divIcon({ className: 'custom-icon', html: `<div style="background-color: ${checkResult.status === 'blocked' ? '#ef4444' : '#22c55e'}; width: 20px; height: 20px; border-radius: 50%; border: 3px solid white; box-shadow: 0 0 10px rgba(0,0,0,0.5); animation: pulse 1s infinite;"></div>`, iconSize: [20, 20], iconAnchor: [10, 10] }); 
+                    layersRef.current.push(L.marker(candidate, { icon, interactive: false }).addTo(map)); 
+                }
+            };
+
+            const clearAll = () => { setConfirmAction({ type: 'clear', title: '清空所有資料', message: '確定要清空所有資料嗎？\n這也會清除瀏覽器的暫存紀錄。', isDangerous: true }); };
+            const resetSystem = () => { setConfirmAction({ type: 'reset', title: '重置系統', message: '警告：這將會強制清除快取並重新載入網頁。\n如果系統卡住，請使用此功能。', isDangerous: true }); };
+
+            if (!isAuthenticated) return <LoginScreen onLogin={() => setIsAuthenticated(true)} />;
+
+            return (
+                <div className="flex flex-col h-full font-sans relative">
+                    <PasteModal isOpen={showPasteModal} onClose={() => setShowPasteModal(false)} onProcess={handlePasteImport} />
+                    {editingProps && <EditStoreModal store={editingProps} onClose={() => setEditingProps(null)} onSave={handleSaveProps} />}
+                    {alertMessage && <AlertModal message={alertMessage} onClose={() => setAlertMessage(null)} />}
+                    {confirmAction && <ConfirmModal title={confirmAction.title} message={confirmAction.message} isDangerous={confirmAction.isDangerous} onCancel={() => setConfirmAction(null)} onConfirm={executeConfirmAction} />}
+                    
+                    {geocodeProgress.active && <div className="fixed inset-0 bg-gray-900/75 z-highest flex items-center justify-center backdrop-blur-sm"><div className="bg-white p-6 rounded-lg shadow-2xl w-80 text-center"><div className="text-blue-600 mb-3 flex justify-center animate-spin"><Icons.Loader /></div><h3 className="font-bold text-lg mb-2 text-gray-800">地址轉換中...</h3><div className="w-full bg-gray-200 rounded-full h-2.5 mb-2"><div className="bg-blue-600 h-2.5 rounded-full progress-bar" style={{width: `${(geocodeProgress.current / geocodeProgress.total) * 100}%`}}></div></div><p className="text-sm text-gray-600">{geocodeProgress.current} / {geocodeProgress.total}</p></div></div>}
+
+                    <header className="bg-white border-b px-4 py-3 flex justify-between items-center shadow-sm z-10">
+                        <div className="flex items-center gap-2"><Icons.Store /><h1 className="font-bold text-lg text-gray-800">加盟保障區域系統</h1></div>
+                        <span className="text-xs text-gray-500">已載入 {stores.length} 間分店</span>
+                    </header>
+                    <div className="flex flex-1 overflow-hidden">
+                        <div className="w-80 bg-white border-r flex flex-col z-10 shadow-lg relative" ref={sidebarRef}>
+                            {/* --- Section 1: Editor/Creator --- */}
+                            <div className="p-4 border-b bg-white border-blue-100">
+                                <label className={`text-xs font-bold mb-2 block flex items-center gap-2 ${editingStoreId ? 'text-orange-600' : 'text-blue-700'}`}>
+                                    {editingStoreId ? <><Icons.Edit /> 正在修改區域：{newStoreName}</> : <><Icons.Plus /> 新增模式 (建立新店)</>}
+                                </label>
+                                
+                                {!editingStoreId ? (
+                                    <>
+                                        <div className="text-[10px] text-gray-400 mb-2">💡 提示：輸入店名是選填的，若留空系統會自動命名。</div>
+                                        <div className="flex gap-2 mb-2">
+                                            <div className="flex items-center gap-1 text-xs bg-gray-50 border rounded px-2 text-gray-600 whitespace-nowrap"><span className="text-gray-400">半徑</span><input type="number" value={defaultRadius} onChange={(e) => setDefaultRadius(Number(e.target.value))} className="w-12 outline-none text-center bg-transparent" /></div>
+                                            <input value={newStoreName} onChange={e=>setNewStoreName(e.target.value)} placeholder="店名(選填)" className="flex-1 border px-2 py-1.5 text-xs rounded focus:ring-2 focus:ring-blue-100 outline-none" />
+                                        </div>
+                                        <div className="flex gap-2">
+                                            <button 
+                                                onClick={()=>{
+                                                    setMode('add-radius');
+                                                    setTempPolygon([]);
+                                                    setIsPolygonClosed(false);
+                                                    setMousePos(null);
+                                                }} 
+                                                className={`flex-1 py-1.5 border text-xs rounded font-medium transition-colors flex items-center justify-center gap-1 ${mode==='add-radius' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-blue-600 hover:bg-blue-50'}`}
+                                            >
+                                                <Icons.Plus /> 半徑店
+                                            </button>
+                                            <button 
+                                                onClick={()=>{
+                                                    setMode('add-polygon');
+                                                    setTempPolygon([]);
+                                                    setIsPolygonClosed(false);
+                                                    setMousePos(null);
+                                                }} 
+                                                className={`flex-1 py-1.5 border text-xs rounded font-medium transition-colors flex items-center justify-center gap-1 ${mode==='add-polygon' ? 'bg-purple-600 text-white border-purple-600' : 'bg-white text-purple-600 hover:bg-purple-50'}`}
+                                            >
+                                                <Icons.Layers /> 多邊形
+                                            </button>
+                                        </div>
+                                    </>
+                                ) : (
+                                    <div className="bg-yellow-50 p-2 rounded border border-yellow-200 mb-2 text-xs text-yellow-800">
+                                        正在重新繪製範圍，完成後將會升級為彩色多邊形區域。
+                                    </div>
+                                )}
+
+                                {mode === 'add-polygon' && (
+                                    <div className="mt-3 bg-purple-50 p-3 rounded-lg border border-purple-100">
+                                        <div className="flex flex-col gap-2 mb-2">
+                                            <span className="text-[10px] text-gray-600 font-bold">區域顏色：</span>
+                                            <div className="flex flex-wrap gap-2">
+                                                {POLYGON_COLORS.map(c => (
+                                                    <button 
+                                                        key={c} 
+                                                        onClick={() => setPolygonColor(c)} 
+                                                        className={`w-5 h-5 rounded-full border-2 transition-transform ${polygonColor === c ? 'border-gray-800 scale-125 shadow-sm' : 'border-transparent hover:scale-110'}`} 
+                                                        style={{ backgroundColor: c }}
+                                                        title="選擇顏色"
+                                                    />
+                                                ))}
+                                            </div>
+                                        </div>
+                                        <div className="flex justify-between items-center mb-2 mt-3">
+                                            <span className="text-[10px] text-purple-800 font-bold">{isPolygonClosed ? "✅ 圖形已封閉" : "👉 請點地圖畫區域"}</span>
+                                            <span className="text-[10px] text-purple-400">{tempPolygon.length} 個點</span>
+                                        </div>
+                                        <div className="flex gap-2 mb-2">
+                                            <button 
+                                                onClick={undoLastPoint} 
+                                                disabled={!isPolygonClosed && tempPolygon.length === 0} 
+                                                className="flex-1 py-1.5 bg-white border border-gray-300 text-gray-600 text-xs rounded hover:bg-gray-100 disabled:opacity-50"
+                                            >
+                                                {isPolygonClosed ? '🔓 解開' : '↩️ 回復上一點'}
+                                            </button>
+                                            <button 
+                                                onClick={() => { setTempPolygon([]); setIsPolygonClosed(false); setMousePos(null); }} 
+                                                className="flex-1 py-1.5 bg-white border border-gray-300 text-gray-600 text-xs rounded hover:bg-gray-100"
+                                            >
+                                                🔄 重新畫
+                                            </button>
+                                        </div>
+                                        <button 
+                                            onClick={savePolygonStore} 
+                                            className={`w-full py-1.5 text-white text-xs rounded font-bold transition-all flex items-center justify-center gap-1 ${isPolygonClosed ? 'bg-green-600 hover:bg-green-700 shadow-md transform scale-105' : 'bg-gray-400 cursor-not-allowed'}`}
+                                        >
+                                            <Icons.Save /> 儲存區域
+                                        </button>
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* --- Section 2: List Header --- */}
+                            <div className="px-4 py-2 bg-gray-50 border-b flex flex-col gap-2">
+                                <div className={`p-2 rounded border text-xs ${checkResult.status==='blocked'?'bg-red-50 border-red-200 text-red-800':checkResult.status==='allowed'?'bg-green-50 border-green-200 text-green-800':'bg-white text-gray-500'}`}>
+                                    <div className="font-bold flex items-center gap-1">{checkResult.status==='blocked'?<Icons.AlertTriangle />:checkResult.status==='allowed'?<Icons.CheckCircle />:<Icons.Navigation />} {checkResult.message || '點擊地圖位置進行檢測'}</div>
+                                </div>
+                                <div className="relative">
+                                    <input type="text" placeholder="🔍 搜尋店名..." value={searchTerm} onChange={e=>setSearchTerm(e.target.value)} className="w-full pl-8 pr-3 py-1.5 border rounded-md text-xs focus:ring-1 focus:ring-blue-500 outline-none" />
+                                    <div className="absolute left-2.5 top-2 text-gray-400"><Icons.Search /></div>
+                                </div>
+                            </div>
+
+                            {/* --- Section 3: Store List --- */}
+                            <div className="flex-1 overflow-y-auto custom-scrollbar bg-gray-50 p-2">
+                                {filteredStores.length === 0 ? (
+                                    <div className="text-center text-gray-400 text-xs mt-10">沒有找到店家</div>
+                                ) : (
+                                    filteredStores.map(store => (
+                                        <div key={store.id} onClick={() => flyToStore(store)} className={`p-3 rounded border mb-2 cursor-pointer shadow-sm group transition-all ${store.type === 'point' ? 'bg-orange-50 border-orange-200 hover:border-orange-400' : 'bg-white border-gray-200 hover:border-blue-400'}`}>
+                                            <div className="flex justify-between items-start">
+                                                <div className="font-bold text-gray-800 text-sm flex items-center gap-1">
+                                                    {store.type === 'point' && <Icons.AlertOctagon className="w-3 h-3 text-orange-500" />}
+                                                    {store.name}
+                                                </div>
+                                                <span className={`text-[10px] px-1.5 py-0.5 rounded ${store.type === 'radius' ? 'bg-blue-100 text-blue-700' : store.type === 'point' ? 'bg-orange-100 text-orange-700 font-bold' : 'bg-purple-100 text-purple-700'}`}>
+                                                    {store.type === 'radius' ? '半徑' : store.type === 'point' ? '未畫範圍' : '多邊形'}
+                                                </span>
+                                            </div>
+                                            <div className="flex justify-between items-end mt-2">
+                                                <div className="text-xs text-gray-500">
+                                                    {store.type === 'radius' ? `保障半徑: ${store.radius}m` : store.type === 'point' ? '點擊右方重繪新增範圍' : '自訂區域 (無固定半徑)'}
+                                                </div>
+                                                <div className="flex gap-1">
+                                                    <button 
+                                                        type="button" 
+                                                        onMouseDown={(e) => e.stopPropagation()} 
+                                                        onClick={(e) => handleRedrawRequest(e, store)}
+                                                        className={`text-xs px-2 py-1 rounded flex items-center gap-1 transition-colors ${store.type === 'point' ? 'bg-orange-500 text-white hover:bg-orange-600 shadow-sm' : 'bg-purple-100 hover:bg-purple-200 text-purple-700'}`}
+                                                        title="修改區域範圍"
+                                                    >
+                                                        <Icons.PenTool /> {store.type === 'point' ? '畫範圍' : '重繪'}
+                                                    </button>
+                                                    <button 
+                                                        type="button"
+                                                        onMouseDown={(e) => e.stopPropagation()} 
+                                                        onClick={(e) => { e.stopPropagation(); setEditingProps(store); }}
+                                                        className="text-xs px-2 py-1 bg-gray-100 hover:bg-blue-100 text-gray-600 hover:text-blue-700 rounded flex items-center gap-1 transition-colors"
+                                                        title="修改屬性"
+                                                    >
+                                                        <Icons.Edit />
+                                                    </button>
+                                                    <button 
+                                                        type="button" 
+                                                        onMouseDown={(e) => e.stopPropagation()} 
+                                                        onClick={(e) => handleDeleteRequest(e, store)}
+                                                        className="text-xs px-2 py-1 bg-gray-100 hover:bg-red-100 text-gray-600 hover:text-red-700 rounded flex items-center gap-1 transition-colors"
+                                                    >
+                                                        <Icons.Trash />
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    ))
+                                )}
+                            </div>
+
+                            {/* --- Section 4: Data Management --- */}
+                            <div className="border-t bg-white">
+                                <button onClick={() => setShowTools(!showTools)} className="w-full p-3 flex justify-between items-center text-xs font-bold text-gray-500 hover:bg-gray-50 uppercase tracking-wider">
+                                    <span>📂 資料管理 (匯入/匯出)</span>
+                                    {showTools ? <Icons.ChevronDown /> : <Icons.ChevronRight />}
+                                </button>
+                                {showTools && (
+                                    <div className="p-4 pt-0 bg-gray-50 border-t border-gray-100">
+                                        <button 
+                                            onClick={handleExportImage} 
+                                            disabled={isExportingImage}
+                                            className="w-full mb-3 flex items-center justify-center gap-1 bg-amber-500 border border-amber-600 text-white text-xs py-2 rounded hover:bg-amber-600 shadow-sm disabled:opacity-50 transition-colors"
+                                        >
+                                            {isExportingImage ? <Icons.Loader /> : <Icons.ImageIcon />} 
+                                            {isExportingImage ? '圖片產生中...' : '匯出地圖截圖 (JPG)'}
+                                        </button>
+                                        <div className="grid grid-cols-2 gap-2 mb-3">
+                                            <button onClick={() => setShowPasteModal(true)} className="bg-indigo-50 text-indigo-700 text-xs py-2 rounded border border-indigo-100 flex justify-center gap-1 items-center hover:bg-indigo-100"><Icons.Clipboard /> 貼上匯入</button>
+                                            <button onClick={() => fileInputRef.current.click()} className="bg-white border text-gray-600 text-xs py-2 rounded flex justify-center gap-1 items-center hover:bg-gray-50"><Icons.FileSpreadsheet /> Excel匯入</button>
+                                            <button onClick={handleExportJSON} className="bg-white border text-gray-600 text-xs py-2 rounded flex justify-center gap-1 items-center hover:bg-gray-50"><Icons.Download /> 備份 JSON</button>
+                                            <button onClick={() => jsonInputRef.current.click()} className="bg-white border text-gray-600 text-xs py-2 rounded flex justify-center gap-1 items-center hover:bg-gray-50"><Icons.Upload /> 還原 JSON</button>
+                                        </div>
+                                        <div className="flex gap-2">
+                                            <button onClick={clearAll} className="flex-1 text-xs text-red-400 hover:text-red-600 flex justify-center gap-1 py-1"><Icons.Eraser /> 清空</button>
+                                            <button onClick={resetSystem} className="flex-1 text-xs text-gray-400 hover:text-gray-600 flex justify-center gap-1 py-1"><Icons.AlertOctagon /> 重置系統</button>
+                                        </div>
+                                        
+                                        <input type="file" ref={fileInputRef} onChange={handleFileUpload} accept=".xlsx,.csv" className="hidden" />
+                                        <input type="file" ref={jsonInputRef} onChange={handleImportJSON} accept=".json" className="hidden" />
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                        <div className="flex-1 relative bg-gray-100">
+                            {mode === 'add-polygon' && (
+                                <div 
+                                    className="absolute top-4 left-1/2 transform -translate-x-1/2 drawing-controls flex flex-col gap-2 items-center"
+                                    onMouseDown={e => e.stopPropagation()}
+                                    onDoubleClick={e => e.stopPropagation()}
+                                >
+                                    <div className={`px-4 py-2 rounded-full shadow-lg text-sm font-bold border animate-pulse ${isPolygonClosed ? 'bg-green-100 text-green-800 border-green-300' : 'bg-yellow-100 text-yellow-800 border-yellow-300'}`}>
+                                        {isPolygonClosed ? '✅ 圖形已封閉！請點擊左側「儲存區域」' : (editingStoreId ? '正在重繪 (點擊地圖)' : '正在繪製 (點擊地圖)')}
+                                    </div>
+                                    {!isPolygonClosed && (
+                                        <button 
+                                            onClick={lockPolygon} 
+                                            disabled={tempPolygon.length < 3}
+                                            className={`text-white px-6 py-2 rounded-full shadow-xl text-sm font-bold flex items-center gap-2 border-2 border-white ring-2 transition-transform pointer-events-auto ${tempPolygon.length < 3 ? 'bg-gray-400 ring-gray-400/30 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700 ring-blue-600/30 active:scale-95'}`}
+                                        >
+                                            <Icons.LockOpen /> {tempPolygon.length < 3 ? `鎖定形狀 (需至少3點)` : '鎖定形狀 (雙擊地圖)'}
+                                        </button>
+                                    )}
+                                </div>
+                            )}
+                            <div id="map-container" ref={mapRef} className="absolute inset-0 z-0"></div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
